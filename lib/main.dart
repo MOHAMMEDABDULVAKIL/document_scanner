@@ -1,11 +1,9 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:google_mlkit_document_scanner/google_mlkit_document_scanner.dart';
-import 'dart:typed_data';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:pdf/widgets.dart' as pw;
-import 'package:path/path.dart' as p;
 
 
 void main() {
@@ -32,35 +30,34 @@ class DocumentScannerPage extends StatefulWidget {
 }
 
 class _DocumentScannerPageState extends State<DocumentScannerPage> {
-  File? scannedImage;
+  List<File> scannedImages = [];
 
   final DocumentScanner documentScanner = DocumentScanner(
     options: DocumentScannerOptions(
       mode: ScannerMode.full,
-      pageLimit: 1,
+      pageLimit: 10,
       isGalleryImport: true, // ✅ Enables gallery inside scanner UI
     ),
   );
 
   Future<void> scanDocument() async {
-    //  Delete previous scanned image file
-    if (scannedImage != null && await scannedImage!.exists()) {
-      await scannedImage!.delete();
-      scannedImage = null;
+    // Delete old files
+    for (var file in scannedImages) {
+      if (await file.exists()) {
+        await file.delete();
+      }
     }
+    scannedImages.clear();
 
     final DocumentScanningResult result =
     await documentScanner.scanDocument();
 
     if (result.images.isNotEmpty) {
       setState(() {
-        scannedImage = File(result.images.first);
+        scannedImages = result.images.map((e) => File(e)).toList();
       });
     }
   }
-
-
-
 
 
   // ================= SAVE HELPERS =================
@@ -90,22 +87,25 @@ class _DocumentScannerPageState extends State<DocumentScannerPage> {
 
 // Save as PNG
   Future<void> saveAsImage() async {
-    if (scannedImage == null) return;
+    if (scannedImages.isEmpty) return;
 
     await requestPermission();
     final dir = await getPublicDownloadDirectory();
 
-    final String path =
-        "${dir.path}/scanned_${DateTime.now().millisecondsSinceEpoch}.png";
+    for (int i = 0; i < scannedImages.length; i++) {
+      final String path =
+          "${dir.path}/scan_page_${i + 1}_${DateTime.now().millisecondsSinceEpoch}.png";
 
-    await scannedImage!.copy(path);
+      await scannedImages[i].copy(path);
+    }
 
-    showSnack("Saved as PNG\n$path");
+    showSnack("Saved ${scannedImages.length} images as PNG in Download folder");
   }
+
 
 // Save as PDF  (DOC option = PDF)
   Future<void> saveAsPdf() async {
-    if (scannedImage == null) return;
+    if (scannedImages.isEmpty) return;
 
     await requestPermission();
     final dir = await getPublicDownloadDirectory();
@@ -115,24 +115,27 @@ class _DocumentScannerPageState extends State<DocumentScannerPage> {
 
     final pdf = pw.Document();
 
-    final imageBytes = await scannedImage!.readAsBytes();
-    final image = pw.MemoryImage(imageBytes);
+    for (var imgFile in scannedImages) {
+      final imageBytes = await imgFile.readAsBytes();
+      final image = pw.MemoryImage(imageBytes);
 
-    pdf.addPage(
-      pw.Page(
-        build: (pw.Context context) {
-          return pw.Center(
-            child: pw.Image(image),
-          );
-        },
-      ),
-    );
+      pdf.addPage(
+        pw.Page(
+          build: (pw.Context context) {
+            return pw.Center(
+              child: pw.Image(image, fit: pw.BoxFit.contain),
+            );
+          },
+        ),
+      );
+    }
 
     final file = File(path);
     await file.writeAsBytes(await pdf.save());
 
-    showSnack("Saved as PDF\n$path");
+    showSnack("Multi-page PDF saved\n$path");
   }
+
 
   void showSnack(String msg) {
     ScaffoldMessenger.of(context).showSnackBar(
@@ -167,8 +170,6 @@ class _DocumentScannerPageState extends State<DocumentScannerPage> {
     );
   }
 
-
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -177,13 +178,32 @@ class _DocumentScannerPageState extends State<DocumentScannerPage> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            if (scannedImage != null) ...[
-              const Text("Scanned Document"),
+            if (scannedImages.isNotEmpty) ...[
+              const Text("Scanned Pages"),
               const SizedBox(height: 10),
-              Image.file(scannedImage!, height: 300),
+
+              SizedBox(
+                height: 300,
+                child: ListView.builder(
+                  scrollDirection: Axis.horizontal,
+                  itemCount: scannedImages.length,
+                  itemBuilder: (context, index) {
+                    return Padding(
+                      padding: const EdgeInsets.all(8.0),
+                      child: Column(
+                        children: [
+                          Text("Page ${index + 1}"),
+                          const SizedBox(height: 5),
+                          Image.file(scannedImages[index], height: 220),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ),
+
               const SizedBox(height: 20),
 
-              // SAVE BUTTON
               ElevatedButton.icon(
                 onPressed: showSaveDialog,
                 icon: const Icon(Icons.save),
@@ -192,6 +212,7 @@ class _DocumentScannerPageState extends State<DocumentScannerPage> {
 
               const SizedBox(height: 20),
             ],
+
 
             ElevatedButton.icon(
               onPressed: scanDocument,
