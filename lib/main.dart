@@ -36,9 +36,78 @@ class _DocumentScannerPageState extends State<DocumentScannerPage> {
     options: DocumentScannerOptions(
       mode: ScannerMode.full,
       pageLimit: 10,
-      isGalleryImport: true, // ✅ Enables gallery inside scanner UI
+      isGalleryImport: true, // Enables gallery inside scanner UI
     ),
   );
+
+
+  Future<String?> askFileName() async {
+    TextEditingController controller = TextEditingController();
+
+    return showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text("Enter File Name"),
+        content: TextField(
+          controller: controller,
+          decoration: const InputDecoration(
+            hintText: "Example: MathNotes",
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text("Cancel"),
+          ),
+          TextButton(
+            onPressed: () {
+              if (controller.text.trim().isEmpty) return;
+              Navigator.pop(context, controller.text.trim());
+            },
+            child: const Text("Save"),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ===== NEW STORAGE FUNCTIONS =====
+
+  Future<void> requestStoragePermission() async {
+    if (Platform.isAndroid) {
+      await Permission.storage.request();
+      await Permission.manageExternalStorage.request();
+    }
+  }
+
+  Future<Directory> getVisibleAppFolder(String type) async {
+    if (Platform.isAndroid) {
+      final Directory docsDir = Directory('/storage/emulated/0/Documents');
+
+      final Directory appDir = Directory("${docsDir.path}/DocumentScanner");
+
+      if (!await appDir.exists()) {
+        await appDir.create(recursive: true);
+      }
+
+      final Directory typeDir = Directory("${appDir.path}/$type");
+
+      if (!await typeDir.exists()) {
+        await typeDir.create(recursive: true);
+      }
+
+      return typeDir;
+    } else {
+      final base = await getApplicationDocumentsDirectory();
+      final typeDir = Directory("${base.path}/$type");
+
+      if (!await typeDir.exists()) {
+        await typeDir.create(recursive: true);
+      }
+
+      return typeDir;
+    }
+  }
 
   Future<void> scanDocument() async {
     // Delete old files
@@ -60,46 +129,22 @@ class _DocumentScannerPageState extends State<DocumentScannerPage> {
   }
 
 
-  // ================= SAVE HELPERS =================
-
-  Future<void> requestPermission() async {
-    if (Platform.isAndroid) {
-      await Permission.storage.request();
-      await Permission.manageExternalStorage.request();
-    }
-  }
-
-
-
-  Future<Directory> getPublicDownloadDirectory() async {
-    if (Platform.isAndroid) {
-      final Directory dir = Directory('/storage/emulated/0/Download');
-      if (!await dir.exists()) {
-        await dir.create(recursive: true);
-      }
-      return dir;
-    } else {
-      return await getApplicationDocumentsDirectory();
-    }
-  }
-
-
-
 // Save as PNG
   Future<void> saveAsImage() async {
     if (scannedImages.isEmpty) return;
 
-    await requestPermission();
-    final dir = await getPublicDownloadDirectory();
+    final fileName = await askFileName();
+    if (fileName == null) return;
+
+    await requestStoragePermission();
+    final dir = await getVisibleAppFolder("PNG");
 
     for (int i = 0; i < scannedImages.length; i++) {
-      final String path =
-          "${dir.path}/scan_page_${i + 1}_${DateTime.now().millisecondsSinceEpoch}.png";
-
+      final path = "${dir.path}/${fileName}_${i + 1}.png";
       await scannedImages[i].copy(path);
     }
 
-    showSnack("Saved ${scannedImages.length} images as PNG in Download folder");
+    showSnack("Saved as $fileName in PNG folder");
   }
 
 
@@ -107,35 +152,31 @@ class _DocumentScannerPageState extends State<DocumentScannerPage> {
   Future<void> saveAsPdf() async {
     if (scannedImages.isEmpty) return;
 
-    await requestPermission();
-    final dir = await getPublicDownloadDirectory();
+    final fileName = await askFileName();
+    if (fileName == null) return;
 
-    final String path =
-        "${dir.path}/scanned_${DateTime.now().millisecondsSinceEpoch}.pdf";
+    await requestStoragePermission();
+    final dir = await getVisibleAppFolder("PDF");
+
+    final path = "${dir.path}/$fileName.pdf";
 
     final pdf = pw.Document();
 
-    for (var imgFile in scannedImages) {
-      final imageBytes = await imgFile.readAsBytes();
-      final image = pw.MemoryImage(imageBytes);
+    for (var img in scannedImages) {
+      final bytes = await img.readAsBytes();
+      final image = pw.MemoryImage(bytes);
 
       pdf.addPage(
         pw.Page(
-          build: (pw.Context context) {
-            return pw.Center(
-              child: pw.Image(image, fit: pw.BoxFit.contain),
-            );
-          },
+          build: (_) => pw.Center(child: pw.Image(image)),
         ),
       );
     }
 
-    final file = File(path);
-    await file.writeAsBytes(await pdf.save());
+    await File(path).writeAsBytes(await pdf.save());
 
-    showSnack("Multi-page PDF saved\n$path");
+    showSnack("Saved as $fileName.pdf in PDF folder");
   }
-
 
   void showSnack(String msg) {
     ScaffoldMessenger.of(context).showSnackBar(
